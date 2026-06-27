@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ÉquipeSync</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;800&family=DM+Serif+Display&family=DM+Mono:wght@500&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f1a; color: #e8e8f0; font-family: 'DM Sans', sans-serif; }
+    @keyframes pulse { 0%,100%{box-shadow:0 0 8px #FF475788} 50%{box-shadow:0 0 16px #FF4757cc} }
+    @keyframes slideIn { from{transform:translateX(40px);opacity:0} to{transform:translateX(0);opacity:1} }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module">
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAaBf-o_xZciCrjjhPZaAIMWZrlSmWgKg0",
+  authDomain: "equipesync-3b184.firebaseapp.com",
+  projectId: "equipesync-3b184",
+  storageBucket: "equipesync-3b184.firebasestorage.app",
+  messagingSenderId: "768753023687",
+  appId: "1:768753023687:web:d0115d6f9fdbe13c455ce2"
+};
+
+let db = null;
+let firebaseReady = false;
+let firebaseCallbacks = [];
+function onFirebaseReady(cb) {
+  if (firebaseReady) cb(db);
+  else firebaseCallbacks.push(cb);
+}
+(async () => {
+  try {
+    const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js");
+    const { getFirestore, doc, setDoc, onSnapshot } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
+    const app = initializeApp(FIREBASE_CONFIG);
+    db = { fs: getFirestore(app), doc, setDoc, onSnapshot };
+    firebaseReady = true;
+    firebaseCallbacks.forEach(cb => cb(db));
+  } catch(e) { console.error("Firebase init error:", e); }
+})();
+
+const MANAGER_CODE = "1234";
+const COLORS = ["#E8A87C","#85C1E9","#A9DFBF","#F1948A","#BB8FCE","#F7DC6F","#82E0AA","#F0B27A"];
+const STATUS_OPTIONS = [
+  { value: "à faire", label: "À faire", color: "#E8A87C" },
+  { value: "en cours", label: "En cours", color: "#85C1E9" },
+  { value: "complété", label: "Complété", color: "#82E0AA" },
+  { value: "bloqué", label: "Bloqué", color: "#F1948A" },
+];
+const PRIORITY_OPTIONS = [
+  { value: "urgente", label: "🚨 Urgente", color: "#FF4757" },
+  { value: "haute", label: "🔴 Haute", color: "#F1948A" },
+  { value: "moyenne", label: "🟡 Moyenne", color: "#F7DC6F" },
+  { value: "basse", label: "🟢 Basse", color: "#82E0AA" },
+];
+const LS = {
+  get: (k, f = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : f; } catch { return f; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+const initData = { members: [], followUps: [], expectations: [], commonTasks: [] };
+
+const { useState, useEffect } = React;
+
+function Avatar({ name, color, size = 40 }) {
+  const initials = name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
+  return <div style={{ width: size, height: size, borderRadius: "50%", background: color, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: size * 0.38, color: "#1a1a2e", flexShrink: 0 }}>{initials}</div>;
+}
+function Badge({ label, color }) {
+  return <span style={{ background: color + "22", color, border: `1px solid ${color}55`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>;
+}
+function Btn({ children, variant = "ghost", onClick, style = {}, disabled }) {
+  const base = { padding: "8px 16px", borderRadius: 8, cursor: disabled ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, fontFamily: "'DM Sans',sans-serif", border: "none", transition: "all 0.15s", opacity: disabled ? 0.5 : 1, ...style };
+  const variants = { primary: { background: "#E8A87C", color: "#1a1a2e" }, danger: { background: "#F1948A18", color: "#F1948A", border: "1px solid #F1948A44" }, ghost: { background: "#1e1e38", color: "#ccccee" } };
+  return <button onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant] }}>{children}</button>;
+}
+function Input({ label, ...props }) {
+  return <div style={{ marginBottom: 14 }}>{label && <div style={{ fontSize: 11, fontWeight: 700, color: "#8888aa", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>{label}</div>}<input style={{ width: "100%", background: "#0f0f1a", border: "1px solid #2a2a4a", borderRadius: 8, padding: "10px 14px", color: "#e8e8f0", fontSize: 14, fontFamily: "'DM Sans',sans-serif", outline: "none", boxSizing: "border-box" }} {...props} /></div>;
+}
+function Select({ label, children, ...props }) {
+  return <div style={{ marginBottom: 14 }}>{label && <div style={{ fontSize: 11, fontWeight: 700, color: "#8888aa", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>{label}</div>}<select style={{ width: "100%", background: "#0f0f1a", border: "1px solid #2a2a4a", borderRadius: 8, padding: "10px 14px", color: "#e8e8f0", fontSize: 14, fontFamily: "'DM Sans',sans-serif", cursor: "pointer", outline: "none", boxSizing: "border-box" }} {...props}>{children}</select></div>;
+}
+function Textarea({ label, ...props }) {
+  return <div style={{ marginBottom: 14 }}>{label && <div style={{ fontSize: 11, fontWeight: 700, color: "#8888aa", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 5 }}>{label}</div>}<textarea style={{ width: "100%", background: "#0f0f1a", border: "1px solid #2a2a4a", borderRadius: 8, padding: "10px 14px", color: "#e8e8f0", fontSize: 14, fontFamily: "'DM Sans',sans-serif", outline: "none", boxSizing: "border-box", resize: "vertical", minHeight: 80 }} {...props} /></div>;
+}
+function Modal({ title, onClose, children }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#00000088", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }} onClick={onClose}>
+      <div style={{ background: "#1a1a2e", border: "1px solid #3a3a5a", borderRadius: 16, padding: "26px 30px", width: "100%", maxWidth: 460, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'DM Serif Display',serif", marginBottom: 22 }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+function Empty({ icon, title, sub }) {
+  return <div style={{ textAlign: "center", padding: "60px 20px", color: "#5555aa" }}><div style={{ fontSize: 44 }}>{icon}</div><div style={{ fontSize: 16, fontWeight: 600, marginTop: 12, marginBottom: 6, color: "#8888aa" }}>{title}</div><div style={{ fontSize: 14 }}>{sub}</div></div>;
+}
+
+function LoginScreen({ members, onLogin }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [managerMode, setManagerMode] = useState(false);
+  const tryManager = () => {
+    if (code === MANAGER_CODE) onLogin({ role: "manager", name: "Gestionnaire" });
+    else setError("Code incorrect.");
+  };
+  return (
+    <div style={{ minHeight: "100vh", background: "#0f0f1a", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <div style={{ textAlign: "center", marginBottom: 40 }}>
+          <div style={{ fontSize: 48, marginBottom: 10 }}>🎯</div>
+          <div style={{ fontSize: 32, fontWeight: 800, fontFamily: "'DM Serif Display',serif", color: "#f0f0fa" }}>ÉquipeSync</div>
+          <div style={{ fontSize: 13, color: "#6666aa", fontFamily: "'DM Mono',monospace", letterSpacing: "0.08em", marginTop: 6 }}>Qui êtes-vous ?</div>
+        </div>
+        {!managerMode ? (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#5555aa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Membres de l'équipe</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
+              {members.length === 0 && <div style={{ color: "#5555aa", fontSize: 13, textAlign: "center", padding: "20px 0" }}>Aucun membre — connecte-toi d'abord en tant que gestionnaire.</div>}
+              {members.map(m => (
+                <div key={m.id} onClick={() => onLogin({ role: "member", id: m.id, name: m.name, color: m.color })}
+                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 12, cursor: "pointer" }}>
+                  <Avatar name={m.name} color={m.color} size={40} />
+                  <div><div style={{ fontSize: 15, fontWeight: 700, color: "#f0f0fa" }}>{m.name}</div><div style={{ fontSize: 12, color: "#6666aa" }}>{m.role || "Membre"}</div></div>
+                  <div style={{ marginLeft: "auto", color: "#4444aa", fontSize: 18 }}>›</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ borderTop: "1px solid #2a2a4a", paddingTop: 20, textAlign: "center" }}>
+              <button onClick={() => setManagerMode(true)} style={{ background: "none", border: "none", color: "#6666aa", fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>Accès gestionnaire</button>
+            </div>
+          </>
+        ) : (
+          <div style={{ background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 14, padding: "24px 22px" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#f0f0fa", marginBottom: 16 }}>🔐 Code gestionnaire</div>
+            <Input placeholder="••••" type="password" value={code} onChange={e => { setCode(e.target.value); setError(""); }} onKeyDown={e => e.key === "Enter" && tryManager()} />
+            {error && <div style={{ color: "#FF4757", fontSize: 12, marginBottom: 10 }}>{error}</div>}
+            <div style={{ display: "flex", gap: 10 }}>
+              <Btn onClick={() => setManagerMode(false)}>Retour</Btn>
+              <Btn variant="primary" onClick={tryManager} style={{ flex: 1 }}>Entrer</Btn>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(() => LS.get("equipe-session-v3", null));
+  const [data, setData] = useState(initData);
+  const [fbReady, setFbReady] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState("membres");
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState({});
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [search, setSearch] = useState("");
+  const [toasts, setToasts] = useState([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [seenUrgent, setSeenUrgent] = useState(() => LS.get(`equipe-seen-${LS.get("equipe-session-v3")?.id || "manager"}`, []));
+
+  useEffect(() => {
+    onFirebaseReady((fb) => {
+      setFbReady(true);
+      const ref = fb.doc(fb.fs, "app", "data");
+      fb.onSnapshot(ref, (snap) => { if (snap.exists()) setData(snap.data()); });
+    });
+  }, []);
+
+  const saveData = async (newData) => {
+    setData(newData);
+    if (!fbReady || !db) return;
+    setSaving(true);
+    try { await db.setDoc(db.doc(db.fs, "app", "data"), newData); } catch(e) { console.error(e); }
+    setSaving(false);
+  };
+
+  const upd = (key, val) => saveData({ ...data, [key]: val });
+  const getMember = id => data.members.find(m => m.id === id);
+  const isManager = session?.role === "manager";
+  const statusColor = s => STATUS_OPTIONS.find(o => o.value === s)?.color || "#888";
+  const priorityColor = p => PRIORITY_OPTIONS.find(o => o.value === p)?.color || "#888";
+
+  const urgentTasks = isManager
+    ? data.followUps.filter(f => f.priority === "urgente" && f.status !== "complété")
+    : data.followUps.filter(f => f.priority === "urgente" && f.status !== "complété" && f.memberId === session?.id);
+  const unreadCount = urgentTasks.filter(f => !seenUrgent.includes(f.id)).length;
+
+  const showToast = (msg, color = "#FF4757") => {
+    const id = Date.now();
+    setToasts(t => [...t, { id, msg, color }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4500);
+  };
+
+  const markAllSeen = () => {
+    const ids = urgentTasks.map(f => f.id);
+    setSeenUrgent(ids);
+    LS.set(`equipe-seen-${session?.id || "manager"}`, ids);
+    setNotifOpen(false);
+  };
+
+  const logout = () => { LS.set("equipe-session-v3", null); setSession(null); setTab("membres"); };
+  const login = (s) => {
+    setSession(s);
+    LS.set("equipe-session-v3", s);
+    setSeenUrgent(LS.get(`equipe-seen-${s?.id || "manager"}`, []));
+    if (s.role === "member") setTab("suivis");
+  };
+
+  const addMember = () => {
+    if (!form.name?.trim()) return;
+    upd("members", [...data.members, { id: Date.now(), name: form.name.trim(), role: form.role?.trim() || "", color: COLORS[data.members.length % COLORS.length], createdAt: new Date().toISOString() }]);
+    setModal(null); setForm({});
+  };
+  const deleteMember = id => {
+    saveData({ ...data, members: data.members.filter(m => m.id !== id), followUps: data.followUps.filter(f => f.memberId !== id), expectations: data.expectations.filter(e => e.memberId !== id) });
+    if (selectedMember === id) setSelectedMember(null);
+  };
+  const addFollowUp = () => {
+    if (!form.title?.trim() || !form.memberId) return;
+    const item = { id: Date.now(), memberId: Number(form.memberId), title: form.title.trim(), notes: form.notes?.trim() || "", status: form.status || "à faire", priority: form.priority || "moyenne", dueDate: form.dueDate || "", createdAt: new Date().toISOString() };
+    upd("followUps", [...data.followUps, item]);
+    if (item.priority === "urgente") showToast(`🚨 Tâche urgente : ${item.title}`);
+    setModal(null); setForm({});
+  };
+  const addExpectation = () => {
+    if (!form.title?.trim() || !form.memberId) return;
+    upd("expectations", [...data.expectations, { id: Date.now(), memberId: Number(form.memberId), title: form.title.trim(), description: form.description?.trim() || "", category: form.category?.trim() || "Général", createdAt: new Date().toISOString() }]);
+    setModal(null); setForm({});
+  };
+  const addCommon = () => {
+    if (!form.title?.trim()) return;
+    const item = { id: Date.now(), title: form.title.trim(), notes: form.notes?.trim() || "", status: "à faire", priority: form.priority || "moyenne", dueDate: form.dueDate || "", createdBy: session?.id || "manager", createdByName: session?.name, createdAt: new Date().toISOString() };
+    upd("commonTasks", [...(data.commonTasks || []), item]);
+    if (item.priority === "urgente") showToast(`🚨 Tâche urgente commune : ${item.title}`);
+    setModal(null); setForm({});
+  };
+
+  const myFollowUps = isManager
+    ? data.followUps.filter(f => (!selectedMember || f.memberId === selectedMember) && (!search || f.title.toLowerCase().includes(search.toLowerCase())))
+    : data.followUps.filter(f => f.memberId === session?.id && (!search || f.title.toLowerCase().includes(search.toLowerCase())));
+  const myExpectations = isManager
+    ? data.expectations.filter(e => (!selectedMember || e.memberId === selectedMember) && (!search || e.title.toLowerCase().includes(search.toLowerCase())))
+    : data.expectations.filter(e => e.memberId === session?.id && (!search || e.title.toLowerCase().includes(search.toLowerCase())));
+  const commonTasks = (data.commonTasks || []).filter(t => !search || t.title.toLowerCase().includes(search.toLowerCase()));
+  const statsFor = id => ({ total: data.followUps.filter(f => f.memberId === id).length, done: data.followUps.filter(f => f.memberId === id && f.status === "complété").length, exp: data.expectations.filter(e => e.memberId === id).length });
+  const tabs = isManager ? [["membres","👥 Membres"],["suivis","📋 Suivis"],["attentes","🎯 Attentes"],["commun","🌐 Commun"]] : [["suivis","📋 Mes suivis"],["attentes","🎯 Mes attentes"],["commun","🌐 Commun"]];
+
+  if (!session) return <LoginScreen members={data.members} onLogin={login} />;
+
+  const S = {
+    header: { background: "linear-gradient(135deg,#1a1a2e,#16213e)", borderBottom: "1px solid #2a2a4a", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
+    tabBtn: a => ({ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, background: a ? "#E8A87C" : "transparent", color: a ? "#1a1a2e" : "#8888aa" }),
+    mrow: a => ({ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 10, cursor: "pointer", background: a ? "#1e1e38" : "transparent", border: a ? "1px solid #3a3a5a" : "1px solid transparent" }),
+    card: { background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 14, padding: "18px 20px", marginBottom: 12 },
+    statBox: { flex: 1, background: "#0f0f1a", borderRadius: 8, padding: "10px 12px", textAlign: "center" },
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0f0f1a", color: "#e8e8f0", display: "flex", flexDirection: "column" }}>
+      <div style={S.header}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,#E8A87C,#F1948A)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}>🎯</div>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 800, fontFamily: "'DM Serif Display',serif" }}>ÉquipeSync</div>
+            <div style={{ fontSize: 10, color: fbReady ? "#82E0AA" : "#F7DC6F", fontFamily: "'DM Mono',monospace", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+              {fbReady ? (saving ? "💾 Sauvegarde..." : "🟢 En ligne — données partagées") : "⏳ Connexion..."}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", gap: 4, background: "#0f0f1a", padding: 4, borderRadius: 10 }}>
+            {tabs.map(([t, label]) => <button key={t} style={S.tabBtn(tab === t)} onClick={() => setTab(t)}>{label}</button>)}
+          </div>
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setNotifOpen(o => !o)} style={{ background: unreadCount > 0 ? "#FF475722" : "#1e1e38", border: `1px solid ${unreadCount > 0 ? "#FF4757" : "#2a2a4a"}`, borderRadius: 10, width: 38, height: 38, cursor: "pointer", fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+              🔔{unreadCount > 0 && <span style={{ position: "absolute", top: -5, right: -5, background: "#FF4757", color: "#fff", borderRadius: "50%", width: 17, height: 17, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", animation: "pulse 1.5s infinite" }}>{unreadCount}</span>}
+            </button>
+            {notifOpen && (
+              <div style={{ position: "absolute", top: 46, right: 0, background: "#1a1a2e", border: "1px solid #3a3a5a", borderRadius: 14, width: 310, zIndex: 200, boxShadow: "0 8px 32px #00000077", overflow: "hidden" }}>
+                <div style={{ padding: "12px 16px", borderBottom: "1px solid #2a2a4a", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#FF4757" }}>🚨 {isManager ? "Urgences équipe" : "Mes urgences"}</div>
+                  {unreadCount > 0 && <button onClick={markAllSeen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#8888aa" }}>Tout marquer lu</button>}
+                </div>
+                <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                  {urgentTasks.length === 0 ? <div style={{ padding: "22px 16px", textAlign: "center", color: "#6666aa", fontSize: 13 }}>✅ Aucune urgence</div>
+                    : urgentTasks.map(f => { const m = getMember(f.memberId); const isNew = !seenUrgent.includes(f.id); return (
+                      <div key={f.id} style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e38", background: isNew ? "#FF475710" : "transparent", display: "flex", gap: 10 }}>
+                        {m && <Avatar name={m.name} color={m.color} size={26} />}
+                        <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 700, color: "#f0f0fa" }}>{f.title}</div><div style={{ fontSize: 11, color: "#6666aa" }}>{m?.name}{f.dueDate ? ` · 📅 ${f.dueDate}` : ""}</div></div>
+                        {isNew && <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#FF4757", marginTop: 4 }} />}
+                      </div>
+                    );})}
+                </div>
+                {urgentTasks.length > 0 && <div style={{ padding: "10px 16px", borderTop: "1px solid #2a2a4a" }}><Btn variant="primary" onClick={() => { setTab("suivis"); setNotifOpen(false); markAllSeen(); }} style={{ width: "100%", textAlign: "center" }}>Voir les suivis</Btn></div>}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#1e1e38", border: "1px solid #2a2a4a", borderRadius: 10, padding: "6px 12px" }}>
+            {!isManager && <Avatar name={session.name} color={session.color} size={24} />}
+            {isManager && <span>🔐</span>}
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#ccccee" }}>{isManager ? "Gestionnaire" : session.name}</span>
+            <button onClick={logout} style={{ background: "none", border: "none", cursor: "pointer", color: "#6666aa", fontSize: 11, paddingLeft: 6 }}>Changer</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
+        {isManager && (
+          <div style={{ width: 240, background: "#141422", borderRight: "1px solid #2a2a4a", padding: "18px 12px", display: "flex", flexDirection: "column", gap: 5, overflowY: "auto" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#5555aa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>Équipe ({data.members.length})</div>
+            <div style={S.mrow(!selectedMember)} onClick={() => setSelectedMember(null)}>
+              <span>🌐</span><span style={{ fontSize: 13, fontWeight: 600, color: !selectedMember ? "#f0f0fa" : "#8888aa" }}>Toute l'équipe</span>
+            </div>
+            {data.members.map(m => {
+              const hasUrgent = data.followUps.some(f => f.memberId === m.id && f.priority === "urgente" && f.status !== "complété");
+              return (
+                <div key={m.id} style={S.mrow(selectedMember === m.id)} onClick={() => setSelectedMember(m.id)}>
+                  <Avatar name={m.name} color={m.color} size={30} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#f0f0fa", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                    <div style={{ fontSize: 10, color: "#6666aa" }}>{statsFor(m.id).total} suivis</div>
+                  </div>
+                  {hasUrgent && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#FF4757", animation: "pulse 1.5s infinite" }} />}
+                </div>
+              );
+            })}
+            <Btn onClick={() => { setModal("member"); setForm({}); }} style={{ marginTop: 8, width: "100%", textAlign: "left", borderRadius: 10, fontSize: 12 }}>+ Ajouter un membre</Btn>
+          </div>
+        )}
+
+        <div style={{ flex: 1, padding: "22px 26px", overflowY: "auto" }}>
+          {tab === "membres" && isManager && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'DM Serif Display',serif" }}>{selectedMember ? getMember(selectedMember)?.name : "Tous les membres"}</div>
+                <Btn variant="primary" onClick={() => { setModal("member"); setForm({}); }}>+ Nouveau membre</Btn>
+              </div>
+              {data.members.length === 0 ? <Empty icon="👥" title="Aucun membre" sub="Commence par ajouter les membres de ton équipe." /> : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14 }}>
+                  {(selectedMember ? data.members.filter(m => m.id === selectedMember) : data.members).map(m => {
+                    const st = statsFor(m.id);
+                    const hasUrgent = data.followUps.some(f => f.memberId === m.id && f.priority === "urgente" && f.status !== "complété");
+                    return (
+                      <div key={m.id} style={{ background: "#1a1a2e", border: `1px solid ${hasUrgent ? "#FF475766" : m.color + "44"}`, borderRadius: 16, padding: "18px 16px", position: "relative" }}>
+                        {hasUrgent && <div style={{ position: "absolute", top: 12, right: 12 }}><Badge label="🚨 Urgent" color="#FF4757" /></div>}
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                          <Avatar name={m.name} color={m.color} size={44} />
+                          <div><div style={{ fontSize: 15, fontWeight: 800, color: "#f0f0fa" }}>{m.name}</div><div style={{ fontSize: 12, color: "#8888aa" }}>{m.role || "Aucun rôle"}</div></div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                          <div style={S.statBox}><div style={{ fontSize: 18, fontWeight: 800, color: "#E8A87C" }}>{st.total}</div><div style={{ fontSize: 10, color: "#6666aa" }}>Suivis</div></div>
+                          <div style={S.statBox}><div style={{ fontSize: 18, fontWeight: 800, color: "#82E0AA" }}>{st.done}</div><div style={{ fontSize: 10, color: "#6666aa" }}>Complétés</div></div>
+                          <div style={S.statBox}><div style={{ fontSize: 18, fontWeight: 800, color: "#BB8FCE" }}>{st.exp}</div><div style={{ fontSize: 10, color: "#6666aa" }}>Attentes</div></div>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <Btn style={{ flex: 1, fontSize: 11 }} onClick={() => { setSelectedMember(m.id); setTab("suivis"); }}>📋</Btn>
+                          <Btn style={{ flex: 1, fontSize: 11 }} onClick={() => { setSelectedMember(m.id); setTab("attentes"); }}>🎯</Btn>
+                          <Btn variant="danger" style={{ fontSize: 11, padding: "8px 10px" }} onClick={() => deleteMember(m.id)}>🗑</Btn>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === "suivis" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'DM Serif Display',serif" }}>{isManager ? (selectedMember ? `Suivis — ${getMember(selectedMember)?.name}` : "Tous les suivis") : "Mes suivis"}</div>
+                  <div style={{ fontSize: 11, color: "#6666aa", marginTop: 2 }}>{myFollowUps.length} élément{myFollowUps.length !== 1 ? "s" : ""}</div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ background: "#1a1a2e", border: "1px solid #2a2a4a", borderRadius: 8, padding: "8px 14px", color: "#e8e8f0", fontSize: 13, outline: "none", width: 180 }} placeholder="🔍 Rechercher..." value={search} onChange={e => setSearch(e.target.value)} />
+                  {isManager && <Btn variant="primary" onClick={() => { setModal("followup"); setForm({ memberId: selectedMember ? String(selectedMember) : "" }); }}>+ Nouveau suivi</Btn>}
+                </div>
+              </div>
+              {myFollowUps.length === 0 ? <Empty icon="📋" title="Aucun suivi" sub={isManager ? "Crée un suivi pour un membre." : "Aucun suivi assigné pour l'instant."} /> :
+                myFollowUps.sort((a,b) => ["urgente","haute","moyenne","basse"].indexOf(a.priority) - ["urgente","haute","moyenne","basse"].indexOf(b.priority)).map(f => {
+                  const m = getMember(f.memberId); if (!m) return null;
+                  return (
+                    <div key={f.id} style={{ ...S.card, borderLeft: f.priority === "urgente" ? "3px solid #FF4757" : "3px solid transparent" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <Avatar name={m.name} color={m.color} size={34} />
+                          <div><div style={{ fontSize: 14, fontWeight: 700, color: "#f0f0fa" }}>{f.title}</div><div style={{ fontSize: 11, color: "#6666aa", marginTop: 2 }}>{m.name}{f.dueDate ? ` · 📅 ${f.dueDate}` : ""}</div></div>
+                        </div>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <Badge label={PRIORITY_OPTIONS.find(p => p.value === f.priority)?.label || f.priority} color={priorityColor(f.priority)} />
+                          <Badge label={f.status} color={statusColor(f.status)} />
+                        </div>
+                      </div>
+                      {f.notes && <div style={{ fontSize: 13, color: "#9999bb", lineHeight: 1.6, marginBottom: 10 }}>{f.notes}</div>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 12, color: "#6666aa" }}>Statut :</span>
+                        <select style={{ background: "#0f0f1a", border: "1px solid #2a2a4a", borderRadius: 6, color: "#e8e8f0", padding: "4px 10px", fontSize: 12, cursor: "pointer", outline: "none" }} value={f.status} onChange={e => upd("followUps", data.followUps.map(x => x.id === f.id ? { ...x, status: e.target.value } : x))}>
+                          {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {isManager && <Btn variant="danger" onClick={() => upd("followUps", data.followUps.filter(x => x.id !== f.id))} style={{ padding: "4px 10px", fontSize: 12, marginLeft: "auto" }}>Supprimer</Btn>}
+                      </div>
+                    </div>
+                  );
+                })}
+            </>
+          )}
+
+          {tab === "attentes" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'DM Serif Display',serif" }}>{isManager ? (selectedMember ? `Attentes — ${getMember(selectedMember)?.name}` : "Toutes les attentes") : "Mes attentes"}</div>
+                {isManager && <Btn variant="primary" onClick={() => { setModal("expectation"); setForm({ memberId: selectedMember ? String(selectedMember) : "" }); }}>+ Nouvelle attente</Btn>}
+              </div>
+              {myExpectations.length === 0 ? <Empty icon="🎯" title="Aucune attente" sub={isManager ? "Documente tes attentes pour chaque membre." : "Aucune attente pour l'instant."} /> :
+                myExpectations.map(e => {
+                  const m = getMember(e.memberId); if (!m) return null;
+                  return (
+                    <div key={e.id} style={{ ...S.card, borderLeft: `3px solid ${m.color}` }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <Avatar name={m.name} color={m.color} size={34} />
+                          <div><div style={{ fontSize: 14, fontWeight: 700, color: "#f0f0fa" }}>{e.title}</div><div style={{ fontSize: 11, color: "#6666aa", marginTop: 2 }}>{m.name} · {e.category}</div></div>
+                        </div>
+                        <Badge label={e.category} color={m.color} />
+                      </div>
+                      {e.description && <div style={{ fontSize: 13, color: "#9999bb", lineHeight: 1.6, marginBottom: 8 }}>{e.description}</div>}
+                      {isManager && <div style={{ display: "flex", justifyContent: "flex-end" }}><Btn variant="danger" onClick={() => upd("expectations", data.expectations.filter(x => x.id !== e.id))} style={{ padding: "4px 10px", fontSize: 12 }}>Supprimer</Btn></div>}
+                    </div>
+                  );
+                })}
+            </>
+          )}
+
+          {tab === "commun" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+                <div>
+                  <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'DM Serif Display',serif" }}>🌐 Tâches communes</div>
+                  <div style={{ fontSize: 11, color: "#6666aa", marginTop: 2 }}>Visible par toute l'équipe</div>
+                </div>
+                <Btn variant="primary" onClick={() => { setModal("common"); setForm({}); }}>+ Nouvelle tâche commune</Btn>
+              </div>
+              {commonTasks.length === 0 ? <Empty icon="🌐" title="Aucune tâche commune" sub="Ajoutez des tâches visibles par toute l'équipe." /> :
+                commonTasks.map(t => (
+                  <div key={t.id} style={{ ...S.card, borderLeft: t.priority === "urgente" ? "3px solid #FF4757" : "3px solid #BB8FCE" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#f0f0fa" }}>{t.title}</div>
+                      <div style={{ display: "flex", gap: 5 }}>
+                        <Badge label={PRIORITY_OPTIONS.find(p => p.value === t.priority)?.label || t.priority} color={priorityColor(t.priority)} />
+                        <Badge label={t.status} color={statusColor(t.status)} />
+                      </div>
+                    </div>
+                    {t.notes && <div style={{ fontSize: 13, color: "#9999bb", lineHeight: 1.6, marginBottom: 8 }}>{t.notes}</div>}
+                    {t.dueDate && <div style={{ fontSize: 11, color: "#6666aa", marginBottom: 6 }}>📅 {t.dueDate}</div>}
+                    {t.createdByName && <div style={{ fontSize: 11, color: "#5555aa", marginBottom: 8 }}>✏️ Créé par {t.createdByName}</div>}
+                    {t.assignedTo
+                      ? <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, background: "#82E0AA11", border: "1px solid #82E0AA33", borderRadius: 8, padding: "6px 12px" }}>
+                          <Avatar name={t.assignedName} color={t.assignedColor || "#82E0AA"} size={22} />
+                          <span style={{ fontSize: 12, color: "#82E0AA", fontWeight: 600 }}>Pris en charge par <strong>{t.assignedName}</strong></span>
+                        </div>
+                      : <div style={{ fontSize: 11, color: "#5555aa", marginBottom: 10 }}>👀 Disponible — personne n'a encore pris cette tâche</div>
+                    }
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, color: "#6666aa" }}>Statut :</span>
+                      <select style={{ background: "#0f0f1a", border: "1px solid #2a2a4a", borderRadius: 6, color: "#e8e8f0", padding: "4px 10px", fontSize: 12, cursor: "pointer", outline: "none" }} value={t.status} onChange={e => upd("commonTasks", (data.commonTasks||[]).map(x => x.id === t.id ? { ...x, status: e.target.value } : x))}>
+                        {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                      {!isManager && !t.assignedTo && (
+                        <Btn variant="primary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={() => {
+                          const updated = (data.commonTasks||[]).map(x => x.id === t.id ? { ...x, assignedTo: session.id, assignedName: session.name, assignedColor: session.color, status: "en cours" } : x);
+                          const alreadyIn = data.followUps.some(f => f.fromCommonId === t.id && f.memberId === session.id);
+                          saveData({ ...data, commonTasks: updated, followUps: alreadyIn ? data.followUps : [...data.followUps, { id: Date.now(), memberId: session.id, title: t.title, notes: t.notes||"", status: "en cours", priority: t.priority, dueDate: t.dueDate||"", fromCommonId: t.id, createdAt: new Date().toISOString() }] });
+                          showToast(`✅ Tâche prise en charge : ${t.title}`, "#82E0AA");
+                        }}>✋ Je la prends</Btn>
+                      )}
+                      {!isManager && t.assignedTo === session.id && (
+                        <Btn style={{ padding: "4px 12px", fontSize: 12, color: "#82E0AA", background: "#82E0AA18", border: "1px solid #82E0AA44" }} onClick={() => {
+                          saveData({ ...data, commonTasks: (data.commonTasks||[]).map(x => x.id === t.id ? { ...x, assignedTo: null, assignedName: null, assignedColor: null } : x), followUps: data.followUps.filter(f => !(f.fromCommonId === t.id && f.memberId === session.id)) });
+                        }}>↩ Me désassigner</Btn>
+                      )}
+                      {isManager && t.assignedTo && (
+                        <Btn variant="danger" style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => {
+                          saveData({ ...data, commonTasks: (data.commonTasks||[]).map(x => x.id === t.id ? { ...x, assignedTo: null, assignedName: null, assignedColor: null } : x), followUps: data.followUps.filter(f => f.fromCommonId !== t.id) });
+                        }}>✖ Retirer</Btn>
+                      )}
+                      {(isManager || t.createdBy === session?.id) && (
+                        <Btn variant="danger" onClick={() => saveData({ ...data, commonTasks: (data.commonTasks||[]).filter(x => x.id !== t.id), followUps: data.followUps.filter(f => f.fromCommonId !== t.id) })} style={{ padding: "4px 10px", fontSize: 12, marginLeft: "auto" }}>Supprimer</Btn>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div style={{ position: "fixed", bottom: 22, right: 22, zIndex: 500, display: "flex", flexDirection: "column", gap: 8 }}>
+        {toasts.map(t => <div key={t.id} style={{ background: "#1a1a2e", border: `1px solid ${t.color}`, borderLeft: `4px solid ${t.color}`, borderRadius: 10, padding: "12px 16px", fontSize: 13, fontWeight: 600, color: "#f0f0fa", minWidth: 250, animation: "slideIn 0.3s ease" }}>{t.msg}</div>)}
+      </div>
+
+      {modal === "member" && <Modal title="👤 Nouveau membre" onClose={() => setModal(null)}><Input label="Nom complet *" placeholder="Ex: Marie Tremblay" value={form.name||""} onChange={e => setForm({...form, name: e.target.value})} /><Input label="Rôle / Poste" placeholder="Ex: Réceptionniste" value={form.role||""} onChange={e => setForm({...form, role: e.target.value})} /><div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><Btn onClick={() => setModal(null)}>Annuler</Btn><Btn variant="primary" onClick={addMember}>Ajouter</Btn></div></Modal>}
+      {modal === "followup" && <Modal title="📋 Nouveau suivi" onClose={() => setModal(null)}><Select label="Membre *" value={form.memberId||""} onChange={e => setForm({...form, memberId: e.target.value})}><option value="">— Choisir —</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</Select><Input label="Titre *" placeholder="Ex: Réviser le rapport" value={form.title||""} onChange={e => setForm({...form, title: e.target.value})} /><Textarea label="Notes" value={form.notes||""} onChange={e => setForm({...form, notes: e.target.value})} /><div style={{ display:"flex", gap:10, marginBottom:14 }}><div style={{flex:1}}><Select label="Priorité" value={form.priority||"moyenne"} onChange={e => setForm({...form, priority: e.target.value})}>{PRIORITY_OPTIONS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></div><div style={{flex:1}}><Select label="Statut" value={form.status||"à faire"} onChange={e => setForm({...form, status: e.target.value})}>{STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}</Select></div></div><Input label="Date d'échéance" type="date" value={form.dueDate||""} onChange={e => setForm({...form, dueDate: e.target.value})} /><div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><Btn onClick={() => setModal(null)}>Annuler</Btn><Btn variant="primary" onClick={addFollowUp}>Créer</Btn></div></Modal>}
+      {modal === "expectation" && <Modal title="🎯 Nouvelle attente" onClose={() => setModal(null)}><Select label="Membre *" value={form.memberId||""} onChange={e => setForm({...form, memberId: e.target.value})}><option value="">— Choisir —</option>{data.members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</Select><Input label="Attente *" placeholder="Ex: Livrer les sprints à temps" value={form.title||""} onChange={e => setForm({...form, title: e.target.value})} /><Textarea label="Description" value={form.description||""} onChange={e => setForm({...form, description: e.target.value})} /><Input label="Catégorie" placeholder="Ex: Communication, Qualité..." value={form.category||""} onChange={e => setForm({...form, category: e.target.value})} /><div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><Btn onClick={() => setModal(null)}>Annuler</Btn><Btn variant="primary" onClick={addExpectation}>Enregistrer</Btn></div></Modal>}
+      {modal === "common" && <Modal title="🌐 Nouvelle tâche commune" onClose={() => setModal(null)}><Input label="Titre *" placeholder="Ex: Inventaire boissons" value={form.title||""} onChange={e => setForm({...form, title: e.target.value})} /><Textarea label="Notes" value={form.notes||""} onChange={e => setForm({...form, notes: e.target.value})} /><Select label="Priorité" value={form.priority||"moyenne"} onChange={e => setForm({...form, priority: e.target.value})}>{PRIORITY_OPTIONS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}</Select><Input label="Date d'échéance" type="date" value={form.dueDate||""} onChange={e => setForm({...form, dueDate: e.target.value})} /><div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}><Btn onClick={() => setModal(null)}>Annuler</Btn><Btn variant="primary" onClick={addCommon}>Créer</Btn></div></Modal>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
